@@ -49,7 +49,6 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
         currentVendor = content;
         parsedDeals.push({ vendor: content, deals: [], isGeneratingAll: false });
       } else if ((type === "d" || type === "ed") && currentVendor) {
-        // Ensure deals array exists before pushing
         if(parsedDeals.length > 0) {
             parsedDeals[parsedDeals.length - 1].deals.push({
               text: content,
@@ -68,7 +67,6 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
       const newDeals = [...prevDeals];
       newDeals[vendorIndex].deals[dealIndex].checked = !newDeals[vendorIndex].deals[dealIndex].checked;
       if (newDeals[vendorIndex].deals[dealIndex].checked) {
-        // Use the global confetti function if available
         if (typeof confetti === 'function') {
             confetti({
                 particleCount: 150,
@@ -112,7 +110,6 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
 
   const updateOverusedWords = (newWords) => {
     setOverusedWords(prev => {
-        // Combine, filter unique, keep recent 20 non-empty, longer than 3 chars
         const combined = [...prev, ...newWords];
         const unique = combined.filter((w, i, arr) =>
             w && w.length > 3 && arr.lastIndexOf(w) === i
@@ -122,9 +119,7 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
   };
 
   const generateAIContent = async (vendorIndex, dealIndex, dealText) => {
-    // Set loading state
     setAiProcessing(prev => ({...prev, [`${vendorIndex}-${dealIndex}`]: true}));
-
     const notes = notesInput[`${vendorIndex}-${dealIndex}`] || '';
     if (notes) {
       setNotesInput(prev => {
@@ -134,12 +129,9 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
       });
     }
 
-    try {
-      const completion = await window.websim.chat.completions.create({
-        messages: [
-          {
-            role: "system",
-            content: `You are a travel marketing expert. Transform travel promotions into engaging headlines and descriptions.
+    const VERCEL_API_PROXY_URL = '/api/generate'; // Relative path to your Vercel function
+
+    const systemPromptContent = `You are a travel marketing expert. Transform travel promotions into engaging headlines and descriptions.
             ${aiGuidanceText}
             Important: For BOTH headline and description, replace PPG with "Free Gratuities", OBC with "Onboard Credit", and PP with "Per Person".
             Avoid these overused words: ${overusedWords.join(', ')}.
@@ -148,60 +140,85 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
             {
               headline: string; // 8-12 highly descriptive words highlighting key benefit(s) or offer, focusing mostly on the raw details.
               description: string; // 14-16 words in friendly tone.
-            }`
-          },
-          {
-            role: "user",
-            content: notes
+            }`;
+
+    const userPromptContent = notes
               ? `Transform this travel promotion: "${dealText}". Consider these additional notes: "${notes}"`
-              : `Transform this travel promotion: "${dealText}"`
-          }
-        ],
-        json: true
-      });
+              : `Transform this travel promotion: "${dealText}"`;
 
-      const result = JSON.parse(completion.content);
+    const payloadToBackend = {
+        messages: [
+            {
+                role: "system",
+                content: systemPromptContent
+            },
+            {
+                role: "user",
+                content: userPromptContent
+            }
+        ]
+    };
 
-      // Update overused words tracking
-      const newWords = extractKeywords(result.headline + " " + result.description);
-      updateOverusedWords(newWords);
+    try {
+        const response = await fetch(VERCEL_API_PROXY_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payloadToBackend),
+        });
 
-      // Check for expiry dates in the original deal text using the global function
-      const expiryInfo = typeof findExpiryDate === 'function' ? findExpiryDate(dealText) : null;
-      let finalDescription = result.description;
-
-      // Append " ends M/D" to the description if a formatted date was found
-      if (expiryInfo && expiryInfo.formattedShortDate) {
-        // Add a period if the description doesn't end with one, then append the date info.
-        if (!finalDescription.trim().endsWith('.')) {
-            finalDescription = finalDescription.trim() + '.';
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({
+                error: `API request failed with status ${response.status}`,
+                details: response.statusText
+            }));
+            console.error("Error from backend proxy:", errorData);
+            throw new Error(errorData.error || `API request failed: ${response.status}`);
         }
-        finalDescription += ` Ends ${expiryInfo.formattedShortDate}.`;
-      }
 
-      // Update the deal with AI-generated content
-      setDeals(prevDeals => {
-        const newDeals = [...prevDeals];
-        if (newDeals[vendorIndex] && newDeals[vendorIndex].deals[dealIndex]) {
-            newDeals[vendorIndex].deals[dealIndex].aiGenerated = {
-                headline: result.headline, // Store unmodified headline
-                description: finalDescription, // Store description with appended date
-                // Keep raw expiry info if needed for other purposes, but don't display it directly
-                // expiryDate: expiryInfo
-            };
+        const backendResponse = await response.json();
+
+        if (!backendResponse.content) {
+            console.error("Invalid response from backend, missing 'content':", backendResponse);
+            throw new Error("Invalid response from AI service: Missing content.");
         }
-        return newDeals;
-      });
+
+        const result = JSON.parse(backendResponse.content);
+
+        const newWords = extractKeywords(result.headline + " " + result.description);
+        updateOverusedWords(newWords);
+
+        const expiryInfo = typeof findExpiryDate === 'function' ? findExpiryDate(dealText) : null;
+        let finalDescription = result.description;
+
+        if (expiryInfo && expiryInfo.formattedShortDate) {
+            if (!finalDescription.trim().endsWith('.')) {
+                finalDescription = finalDescription.trim() + '.';
+            }
+            finalDescription += ` Ends ${expiryInfo.formattedShortDate}.`;
+        }
+
+        setDeals(prevDeals => {
+            const newDeals = [...prevDeals];
+            if (newDeals[vendorIndex] && newDeals[vendorIndex].deals[dealIndex]) {
+                newDeals[vendorIndex].deals[dealIndex].aiGenerated = {
+                    headline: result.headline,
+                    description: finalDescription,
+                };
+            }
+            return newDeals;
+        });
+
     } catch (error) {
-      console.error("Error generating AI content:", error);
-       alert(`Failed to generate AI content: ${error.message}`);
+        console.error("Error generating AI content (in app.js):", error);
+        alert(`Failed to generate AI content: ${error.message}`);
     } finally {
-      // Clear loading state
-      setAiProcessing(prev => {
-        const newState = {...prev};
-        delete newState[`${vendorIndex}-${dealIndex}`];
-        return newState;
-      });
+        setAiProcessing(prev => {
+            const newState = {...prev};
+            delete newState[`${vendorIndex}-${dealIndex}`];
+            return newState;
+        });
     }
   };
 
@@ -212,7 +229,6 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
   const generateAllDeals = async (vendorIndex) => {
     const vendor = deals[vendorIndex];
 
-    // Mark the vendor as generating all deals
     setDeals(prevDeals => {
       const newDeals = [...prevDeals];
        if (newDeals[vendorIndex]) {
@@ -221,28 +237,18 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
       return newDeals;
     });
 
-    // Process each deal one at a time with a delay
     for (let dealIndex = 0; dealIndex < vendor.deals.length; dealIndex++) {
-       // Check if component is still mounted or deals haven't been cleared
        if (!deals[vendorIndex] || !deals[vendorIndex].deals[dealIndex]) break;
-
       const deal = vendor.deals[dealIndex];
-
-      // Skip if already generated or currently processing
       if (deal.aiGenerated || aiProcessing[`${vendorIndex}-${dealIndex}`]) {
         continue;
       }
-
-      // Generate AI content for this deal
       await generateAIContent(vendorIndex, dealIndex, deal.text);
-
-      // Wait 2 seconds before processing the next deal, only if not the last one
       if (dealIndex < vendor.deals.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
 
-    // Mark the vendor as finished generating all deals
     setDeals(prevDeals => {
       const newDeals = [...prevDeals];
        if (newDeals[vendorIndex]) {
@@ -255,37 +261,25 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
   const generateAllVendorsDeals = async () => {
     if (deals.length === 0) return;
     
-    // Set global generation state
     setIsGeneratingAll(true);
     setGenerationStatus("Starting generation process...");
     
     try {
-      // Process each vendor sequentially
       for (let vendorIndex = 0; vendorIndex < deals.length; vendorIndex++) {
         const vendor = deals[vendorIndex];
         setGenerationStatus(`Processing ${vendor.vendor} (${vendorIndex + 1}/${deals.length})`);
         
-        // Wait 2 seconds between vendors
         if (vendorIndex > 0) {
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
         
-        // Process each deal in this vendor
         for (let dealIndex = 0; dealIndex < vendor.deals.length; dealIndex++) {
-          // Update status
           setGenerationStatus(`Processing ${vendor.vendor}: Deal ${dealIndex + 1}/${vendor.deals.length}`);
-          
           const deal = vendor.deals[dealIndex];
-          
-          // Skip if already generated or currently processing
           if (deal.aiGenerated || aiProcessing[`${vendorIndex}-${dealIndex}`]) {
             continue;
           }
-          
-          // Generate AI content for this deal
           await generateAIContent(vendorIndex, dealIndex, deal.text);
-          
-          // Wait 3 seconds between deals to be extra careful with rate limits
           if (dealIndex < vendor.deals.length - 1) {
             await new Promise(resolve => setTimeout(resolve, 3000));
           }
@@ -296,7 +290,6 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
       console.error("Error in global deal generation:", error);
       setGenerationStatus(`Error: ${error.message}`);
     } finally {
-      // Allow status message to be visible for a moment
       setTimeout(() => {
         setIsGeneratingAll(false);
         setGenerationStatus("");
@@ -313,7 +306,7 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
           <h3>AI Content Generation Guidelines</h3>
           <button
             className="edit-guidance-button"
-            onClick={() => setIsEditingGuidance(!isEditingGuidance)}
+            onClick={() => setIsEditingGuidance(!isEditingGmidance)}
           >
             {isEditingGuidance ? 'Cancel' : 'Edit'}
           </button>
@@ -333,7 +326,6 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
           </div>
         ) : (
           <div className="guidance-display">
-            {/* Use pre to preserve whitespace/newlines */}
             <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0 }}>{aiGuidanceText}</pre>
             <div className="overused-words">
               <span className="overused-label">Avoiding these words: </span>
@@ -419,7 +411,7 @@ If a deal says "exclusive", you must ALWAYS BEGIN THE DEAL TITLE WITH "EXCLUSIVE
                           onClick={() => deal.aiGenerated
                             ? setNotesInput(prev => ({
                               ...prev,
-                              [`${vendorIndex}-${dealIndex}`]: prev[`${vendorIndex}-${dealIndex}`] === undefined ? "" : prev[`${vendorIndex}-${dealIndex}`] // Toggle notes input visibility
+                              [`${vendorIndex}-${dealIndex}`]: prev[`${vendorIndex}-${dealIndex}`] === undefined ? "" : prev[`${vendorIndex}-${dealIndex}`]
                             }))
                             : generateAIContent(vendorIndex, dealIndex, deal.text)
                           }
