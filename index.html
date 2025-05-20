@@ -1,23 +1,173 @@
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
+<head>
+    <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Deal Checklist</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <title>AI Storm</title>
     <link rel="stylesheet" href="styles.css">
-  </head>
-  <body>
-    <div id="root"></div>
-    <!-- Load React, ReactDOM, Babel, and canvas-confetti -->
-    <script crossorigin src="https://unpkg.com/react@17/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.5.1/dist/confetti.browser.min.js"></script>
-    
-    <!-- Load external JS with helper functions -->
-    <script src="main.js"></script>
-    
-    <!-- Load our React component code (needs Babel to transpile JSX) -->
-    <script type="text/babel" src="app.js"></script>
-  </body>
+    <link rel="stylesheet" href="logo.css">
+    <script type="importmap">
+        {
+            "imports": {
+                "confetti": "https://cdn.skypack.dev/canvas-confetti",
+                "timer": "https://cdn.jsdelivr.net/npm/easytimer@1.1.1/src/easytimer.min.js"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div class="app-container">
+        <header>
+            <div class="logo-container">
+                <div class="logo">
+                    <div class="logo-brain">
+                        <div class="brain-circle"></div>
+                        <div class="brain-path"></div>
+                    </div>
+                    <div class="logo-lightning">
+                        <svg viewBox="0 0 24 24" width="100%" height="100%">
+                            <path d="M13 3v10h5l-7 8v-10h-5l7-8z" fill="currentColor"/>
+                        </svg>
+                    </div>
+                </div>
+                <h1>AI Storm</h1>
+            </div>
+            <p class="tagline">AI-Moderated Guided Brainstorm Tool</p>
+        </header>
+
+        <main>
+            <section id="session-progress" class="progress-banner hidden">
+                <div class="round-indicator">Round <span id="current-round">1</span></div>
+                <div id="ai-progress-comment" class="ai-comment"></div>
+            </section>
+
+            <div id="pinned-ideas-container" class="pinned-ideas-container hidden">
+                <h3>Pinned Ideas</h3>
+                <div id="pinned-ideas" class="pinned-ideas-list"></div>
+            </div>
+
+            <section id="setup-phase" class="phase active">
+                <h2>Session Setup</h2>
+                
+                <div id="iteration-notice" class="iteration-notice hidden">
+                    <p>Starting Round <span id="setup-round-number">2</span>: The AI will now refine questions based on your previous ideas.</p>
+                </div>
+                
+                <div class="form-group">
+                    <label for="context-situation">Tell us about the situation or context:</label>
+                    <textarea id="context-situation" placeholder="e.g., Our company is launching a new product line targeting younger demographics" required></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="context-goal">What is your primary goal?</label>
+                    <input type="text" id="context-goal" placeholder="e.g., Increase market share by 15% in the next 6 months" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="context-challenges">What are your biggest perceived challenges?</label>
+                    <textarea id="context-challenges" placeholder="e.g., Limited marketing budget, strong competition, unclear value proposition" required></textarea>
+                    <div class="suggestion-pills">
+                        <button class="suggestion-pill" data-value="Limited resources or budget">Limited resources or budget</button>
+                        <button class="suggestion-pill" data-value="Strong market competition">Strong market competition</button>
+                        <button class="suggestion-pill" data-value="Unclear value proposition">Unclear value proposition</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="questions-per-round">How many questions per round?</label>
+                    <select id="questions-per-round" required>
+                        <option value="3">3 questions</option>
+                        <option value="4" selected>4 questions</option>
+                        <option value="5">5 questions</option>
+                        <option value="6">6 questions</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="time-available">How much time do you have for this session?</label>
+                    <select id="time-available" required>
+                        <option value="" disabled selected>Select time available</option>
+                        <option value="15">15 minutes</option>
+                        <option value="30">30 minutes</option>
+                        <option value="45">45 minutes</option>
+                        <option value="60">1 hour</option>
+                        <option value="90">1.5 hours</option>
+                        <option value="120">2 hours</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                    <div id="custom-time-container" class="hidden">
+                        <input type="number" id="custom-time" min="5" placeholder="Enter minutes">
+                    </div>
+                </div>
+
+                <div id="ai-loading" class="hidden">
+                    <div class="loading-spinner"></div>
+                    <p>AI is preparing your brainstorming session...</p>
+                </div>
+
+                <button id="start-session" class="primary-btn">Start AI-Guided Session</button>
+            </section>
+
+            <section id="brainstorm-phase" class="phase">
+                <div class="timer-container">
+                    <div id="timer">00:00</div>
+                    <div class="timer-controls">
+                        <button id="pause-timer" class="icon-btn">
+                            <svg viewBox="0 0 24 24" width="24" height="24">
+                                <rect x="6" y="4" width="4" height="16" fill="currentColor"/>
+                                <rect x="14" y="4" width="4" height="16" fill="currentColor"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <h2 id="current-topic">AI-Guided Brainstorming</h2>
+                <div id="ai-prompt" class="prompt">
+                    <div class="ai-typing">
+                        <div class="ai-typing-dot"></div>
+                        <div class="ai-typing-dot"></div>
+                        <div class="ai-typing-dot"></div>
+                    </div>
+                </div>
+
+                <div class="ideas-container">
+                    <textarea id="ideas-input" placeholder="Type ideas here, press Enter to add"></textarea>
+                    <ul id="ideas-list"></ul>
+                </div>
+
+                <div class="progress-bar">
+                    <div class="progress"></div>
+                </div>
+
+                <button id="continue-session" class="primary-btn">Continue to Next Question</button>
+            </section>
+
+            <section id="results-phase" class="phase">
+                <h2>Session Results</h2>
+                
+                <div id="all-rounds-results" class="all-rounds-results">
+                    <!-- Dynamically filled with all rounds' questions and answers -->
+                </div>
+                
+                <div class="summary-container">
+                    <div id="ai-analysis">
+                        <div class="loading-spinner"></div>
+                        <p>AI is analyzing your brainstorming results...</p>
+                    </div>
+                </div>
+                
+                <div class="export-controls">
+                    <button id="copy-results" class="secondary-btn">Copy to Clipboard</button>
+                    <button id="download-results" class="secondary-btn">Download as CSV</button>
+                    <button id="new-session" class="primary-btn">Start Next Round</button>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>AI-Guided Brainstorm Moderator - Generating impactful insights through structured thinking</p>
+        </footer>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+</body>
 </html>
