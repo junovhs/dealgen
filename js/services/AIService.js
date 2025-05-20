@@ -1,18 +1,54 @@
+// ===== FILE: dealgen/js/services/AIService.js ===== //
 export class AIService {
     constructor(sessionState) {
         this.sessionState = sessionState;
+        this.apiEndpoint = '/api/generate'; // Your backend endpoint
     }
-    
+
+    /**
+     * Private helper method to call the backend API.
+     * @param {object} payload - The data to send to the AI, e.g., { messages: [], json?: boolean }
+     * @returns {Promise<object>} - The JSON response from the backend, expected to be { content: "..." }
+     */
+    async _callApi(payload) {
+        try {
+            console.log(`AIService: Calling ${this.apiEndpoint} with payload:`, JSON.stringify(payload));
+            const response = await fetch(this.apiEndpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload), // Send the whole payload (messages, json flag)
+            });
+
+            if (!response.ok) {
+                let errorData;
+                try {
+                    errorData = await response.json(); // Try to parse error response as JSON
+                } catch (e) {
+                    // If not JSON, use text
+                    errorData = { details: await response.text() || `API request failed with status ${response.status}` };
+                }
+                console.error('AIService: API request failed:', errorData);
+                throw new Error(errorData.details || `API request failed with status ${response.status}`);
+            }
+            const result = await response.json(); // The backend should return { content: "..." }
+            console.log('AIService: Received from API:', result);
+            return result;
+        } catch (error) {
+            console.error('AIService: Error calling backend API:', error);
+            throw error; // Re-throw to be caught by calling methods
+        }
+    }
+
     async generateAiQuestions() {
         try {
-            // Create a more comprehensive prompt using all context fields
             const contextPrompt = `
                 SITUATION: ${this.sessionState.contextSituation}
                 GOAL: ${this.sessionState.contextGoal}
                 CHALLENGES: ${this.sessionState.contextChallenges}
             `;
             
-            // Modify prompt based on round
             const structurePrompt = this.sessionState.round === 1 
                 ? `You're helping the user brainstorm with this context:
                    ${contextPrompt}
@@ -32,7 +68,6 @@ export class AIService {
                    For each question, provide a brief (1-2 sentence) explanation of why this follow-up question is important.
                    Additionally, provide 3 example answers for each question that would help the user understand what kind of responses are expected.`;
             
-            // Modify the instructions for suggestion pills to be more comprehensive
             const formatInstructions = `Format your response as JSON with this structure:
             {
               "questions": [
@@ -44,8 +79,8 @@ export class AIService {
               ]
             }`;
             
-            // Generate the questions
-            const completion = await websim.chat.completions.create({
+            // This is what we send to your /api/generate endpoint
+            const requestPayload = {
                 messages: [
                     { role: "system", content: structurePrompt + formatInstructions },
                     { role: "user", content: this.sessionState.round === 1 
@@ -53,19 +88,18 @@ export class AIService {
                         : `I'm continuing to brainstorm about ${this.sessionState.contextGoal} in Round ${this.sessionState.round}.`
                     }
                 ],
-                json: true
-            });
+                json: true // We expect the 'content' field from the API to be a JSON string
+            };
 
-            // Parse the response
-            const content = JSON.parse(completion.content);
+            const apiResponse = await this._callApi(requestPayload);
+
+            // apiResponse.content is expected to be a JSON string from your API
+            const content = JSON.parse(apiResponse.content); 
             this.sessionState.questions = content.questions;
             
-            // Store in conversation history
             this.sessionState.conversationHistory.push({
                 role: "user",
-                content: this.sessionState.round === 1 
-                    ? `I want to brainstorm about achieving ${this.sessionState.contextGoal} and I have ${this.sessionState.totalTime} minutes.`
-                    : `I'm continuing to brainstorm about ${this.sessionState.contextGoal} in Round ${this.sessionState.round}.`
+                content: requestPayload.messages.find(m => m.role === "user").content
             });
             
             this.sessionState.conversationHistory.push({
@@ -77,36 +111,35 @@ export class AIService {
             
         } catch (error) {
             console.error('Error generating AI questions:', error);
-            // Fallback questions if AI fails - use configured number of questions
+            // Fallback questions if API fails
             this.sessionState.questions = [];
             const numQuestions = this.sessionState.questionsPerRound || 4; // Default to 4 if not set
             
             const defaultQuestions = [
                 { 
-                    question: `What are the main challenges related to ${this.sessionState.contextGoal}?`,
+                    question: `Fallback: What are the main challenges related to ${this.sessionState.contextGoal}?`,
                     explanation: "Understanding challenges helps identify opportunities for improvement.",
                     suggestionPills: ["Financial constraints", "Team expertise", "Time constraints"]
                 },
                 {
-                    question: `What solutions have you already tried regarding ${this.sessionState.contextGoal}?`,
+                    question: `Fallback: What solutions have you already tried regarding ${this.sessionState.contextGoal}?`,
                     explanation: "Reflecting on past attempts prevents repeating unsuccessful strategies.",
                     suggestionPills: ["Research", "Consulting experts", "Internally developed solutions"]
                 },
                 {
-                    question: `Who are the key stakeholders affected by ${this.sessionState.contextGoal}, and what are their needs?`,
+                    question: `Fallback: Who are the key stakeholders affected by ${this.sessionState.contextGoal}, and what are their needs?`,
                     explanation: "Considering different perspectives leads to more comprehensive solutions.",
                     suggestionPills: ["Customers", "Team members", "Investors"]
                 },
                 {
-                    question: `What would an ideal outcome for ${this.sessionState.contextGoal} look like?`,
+                    question: `Fallback: What would an ideal outcome for ${this.sessionState.contextGoal} look like?`,
                     explanation: "Defining success creates a clear target for your ideas.",
                     suggestionPills: ["Increased revenue", "Improved customer satisfaction", "Enhanced efficiency"]
                 }
             ];
             
-            // Take only the number of questions requested (or all if less than requested)
             for (let i = 0; i < Math.min(numQuestions, defaultQuestions.length); i++) {
-                this.sessionState.questions.push(defaultQuestions[i]);
+                this.sessionState.questions.push(defaultQuestions[i % defaultQuestions.length]); // Cycle through defaults if numQuestions is higher
             }
             
             return this.sessionState.questions;
@@ -115,19 +148,19 @@ export class AIService {
     
     async generateAiQuestionReview() {
         try {
-            // Skip if it's the first question
             if (this.sessionState.currentQuestionIndex === 0 && !this.sessionState.ideas['question_0']?.length) {
-                return null;
+                return null; // No review for the very first question if no ideas yet
             }
 
-            // Gather all ideas from current session
             const currentIdeas = {};
             for (let i = 0; i <= this.sessionState.currentQuestionIndex; i++) {
                 const questionKey = `question_${i}`;
-                currentIdeas[this.sessionState.questions[i].question] = this.sessionState.ideas[questionKey] || [];
+                // Ensure the question exists before trying to access its text
+                if (this.sessionState.questions[i] && this.sessionState.questions[i].question) {
+                     currentIdeas[this.sessionState.questions[i].question] = this.sessionState.ideas[questionKey] || [];
+                }
             }
 
-            // Create the prompt
             const reviewPrompt = `You're reviewing a brainstorming session about "${this.sessionState.focus}" in Round ${this.sessionState.round}.
             We've just completed question ${this.sessionState.currentQuestionIndex + 1} of ${this.sessionState.questions.length}.
             
@@ -145,33 +178,36 @@ export class AIService {
             Sometimes be tactical ("Let's explore X further"), sometimes be reflective ("Interesting how Y keeps coming up").
             Use proper HTML instead of markdown for any formatting you want to apply. For emphasis, use <strong> or <em> tags instead of asterisks.`;
 
-            // Request AI review
-            const completion = await websim.chat.completions.create({
+            const requestPayload = {
                 messages: [
                     { role: "system", content: reviewPrompt },
                     { role: "user", content: `Review our brainstorming progress after question ${this.sessionState.currentQuestionIndex + 1}` }
                 ]
-            });
+                // No json: true here, so we expect direct HTML/text content from the API's "content" field
+            };
 
-            return completion.content;
+            const apiResponse = await this._callApi(requestPayload);
+
+            return apiResponse.content; // content is the direct HTML/text string from your API
             
         } catch (error) {
             console.error('Error generating AI question review:', error);
             // Fallback message if AI fails
-            return `Round ${this.sessionState.round}: Continuing to brainstorm about "${this.sessionState.focus}"`;
+            return `Round ${this.sessionState.round}: Continuing to brainstorm about "${this.sessionState.focus}" (AI review generation failed).`;
         }
     }
     
     async generateAiAnalysis() {
         try {
-            // Prepare ideas data for AI
             const ideasData = {};
             for (let i = 0; i < this.sessionState.questions.length; i++) {
                 const questionKey = `question_${i}`;
-                ideasData[this.sessionState.questions[i].question] = this.sessionState.ideas[questionKey] || [];
+                // Ensure the question exists
+                if (this.sessionState.questions[i] && this.sessionState.questions[i].question) {
+                    ideasData[this.sessionState.questions[i].question] = this.sessionState.ideas[questionKey] || [];
+                }
             }
             
-            // Request AI analysis
             const analysisPrompt = `You're analyzing results from Round ${this.sessionState.round} of a brainstorming session about "${this.sessionState.focus}".
             Here are the questions and ideas generated for each:
             ${JSON.stringify(ideasData, null, 2)}
@@ -179,35 +215,38 @@ export class AIService {
             ${this.sessionState.round > 1 ? `This is a follow-up round, building on ideas from the previous round.
             Pinned important ideas from previous rounds: ${JSON.stringify(this.sessionState.pinnedIdeas)}` : ''}
             
-            Provide a comprehensive analysis with these sections:
-            1. Summary of key themes from Round ${this.sessionState.round}
-            2. Most promising ideas (2-3 ideas that stand out)
-            3. Potential next steps (3-5 concrete actions)
-            4. Areas that might need further exploration in the next round
+            Provide a comprehensive analysis with these sections (use HTML for formatting):
+            <h3>Summary of key themes from Round ${this.sessionState.round}</h3>
+            <p>...</p>
+            <h3>Most promising ideas (2-3 ideas that stand out)</h3>
+            <p>...</p>
+            <h3>Potential next steps (3-5 concrete actions)</h3>
+            <p>...</p>
+            <h3>Areas that might need further exploration in the next round</h3>
+            <p>...</p>
             
             Make your analysis specific and actionable. Highlight connections between ideas where relevant.`;
             
-            const completion = await websim.chat.completions.create({
+            const requestPayload = {
                 messages: [
                     { role: "system", content: analysisPrompt },
                     { role: "user", content: `Analyze our Round ${this.sessionState.round} brainstorming session about "${this.sessionState.focus}"` }
                 ]
-            });
+                // No json: true, expects direct HTML content in API's "content" field
+            };
+
+            const apiResponse = await this._callApi(requestPayload);
             
-            // Format the analysis with HTML
-            let formattedAnalysis = completion.content
-                .replace(/\n\n/g, '</p><p>')
-                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                .replace(/\n/g, '<br>');
-            
-            return formattedAnalysis;
+            // The content is already expected to be formatted HTML from your API
+            return apiResponse.content;
             
         } catch (error) {
             console.error('Error generating AI analysis:', error);
             return `
                 <p>You brainstormed about "${this.sessionState.focus}" with ${Object.values(this.sessionState.ideas).flat().length} ideas across ${this.sessionState.questions.length} questions.</p>
-                <p>We couldn't generate a detailed AI analysis, but you can review your ideas in the exported results.</p>
+                <p>We couldn't generate a detailed AI analysis due to an API error, but you can review your ideas in the exported results.</p>
             `;
         }
     }
 }
+// ===== END dealgen/js/services/AIService.js ===== //

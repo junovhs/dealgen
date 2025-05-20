@@ -1,27 +1,71 @@
+// ===== FILE: dealgen/js/managers/BrainstormPhaseManager.js ===== //
 import { ResultsPhaseManager } from './ResultsPhaseManager.js';
 
 export class BrainstormPhaseManager {
     constructor(sessionState, domElements, aiService, timerManager, ideasManager, uiManager) {
         this.sessionState = sessionState;
         this.domElements = domElements;
-        this.aiService = aiService;
+        this.aiService = aiService; // AIService instance for most AI calls
         this.timerManager = timerManager;
         this.ideasManager = ideasManager;
         this.uiManager = uiManager;
+        // Direct API endpoint for the specific "more suggestions" call, if needed, or use aiService's _callApi
+        this.apiEndpoint = '/api/generate'; 
+    }
+    
+    /**
+     * Helper to call the backend API for generating more suggestions.
+     * This leverages the same pattern as AIService._callApi
+     */
+    async _callApiForMoreSuggestions(payload) {
+        try {
+            console.log(`BrainstormPhaseManager: Calling ${this.apiEndpoint} for more suggestions with payload:`, JSON.stringify(payload));
+            const response = await fetch(this.apiEndpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+                let errorData;
+                try {
+                    errorData = await response.json();
+                } catch(e) {
+                    errorData = { details: await response.text() || `API request failed with status ${response.status}` };
+                }
+                console.error('BrainstormPhaseManager: API request failed for suggestions:', errorData);
+                throw new Error(errorData.details || `API request for suggestions failed with status ${response.status}`);
+            }
+            const result = await response.json(); // Expects { content: "JSON_STRING_OF_IDEAS" }
+            console.log('BrainstormPhaseManager: Received from API for more suggestions:', result);
+            return result; 
+        } catch (error) {
+            console.error('BrainstormPhaseManager: Error calling backend API for suggestions:', error);
+            throw error;
+        }
     }
     
     startQuestionTimer() {
+        // Ensure questions are loaded
+        if (!this.sessionState.questions || this.sessionState.questions.length === 0 || !this.sessionState.questions[this.sessionState.currentQuestionIndex]) {
+            console.error("BrainstormPhaseManager: Questions not loaded or current question index is invalid.", this.sessionState);
+            this.domElements.currentTopicElement.textContent = `Error: No questions loaded for Round ${this.sessionState.round}.`;
+            this.domElements.aiPromptElement.innerHTML = `<p class="question-text">Could not load the next question. Please try starting a new session.</p>`;
+            return;
+        }
+
         const currentQuestion = this.sessionState.questions[this.sessionState.currentQuestionIndex];
         this.domElements.currentTopicElement.textContent = `Round ${this.sessionState.round} - Question ${this.sessionState.currentQuestionIndex + 1} of ${this.sessionState.questions.length}`;
         
-        // Display the question with typing animation
         this.uiManager.showTypingAnimation();
         setTimeout(() => {
             this.domElements.aiPromptElement.innerHTML = `
                 <p class="question-text">${currentQuestion.question}</p>
                 <p class="question-explanation">${currentQuestion.explanation}</p>
                 <div class="suggestion-pills">
-                    ${currentQuestion.suggestionPills.map(pill => 
+                    ${(currentQuestion.suggestionPills || []).map(pill => 
                         `<button class="suggestion-pill" data-value="${pill}">${pill}</button>`
                     ).join('')}
                     <button id="generate-more-pills" class="generate-more-pills">
@@ -32,7 +76,6 @@ export class BrainstormPhaseManager {
             `;
             this.domElements.aiPromptElement.classList.add('active');
             
-            // Add click event listeners to the suggestion pills
             this.domElements.aiPromptElement.querySelectorAll('.suggestion-pill').forEach(pill => {
                 pill.addEventListener('click', (e) => {
                     const suggestionText = e.target.dataset.value;
@@ -40,22 +83,17 @@ export class BrainstormPhaseManager {
                 });
             });
             
-            // Add click event listener to the "generate more pills" button
             const moreButton = this.domElements.aiPromptElement.querySelector('#generate-more-pills');
             if (moreButton) {
                 moreButton.addEventListener('click', () => this.generateMoreSuggestions(currentQuestion));
             }
-        }, 1500);
+        }, 1500); // Typing animation delay
         
-        // Clear previous ideas display
         this.ideasManager.clearIdeasDisplay();
         this.domElements.ideasInput.value = '';
         this.domElements.ideasInput.focus();
-        
-        // Display existing ideas for this question
         this.ideasManager.displayCurrentQuestionIdeas();
         
-        // Reset timer
         this.sessionState.timeRemaining = this.sessionState.timePerQuestion;
         this.timerManager.startTimer();
     }
@@ -63,17 +101,14 @@ export class BrainstormPhaseManager {
     async generateMoreSuggestions(currentQuestion) {
         const moreButton = this.domElements.aiPromptElement.querySelector('#generate-more-pills');
         if (moreButton) {
-            // Show loading state
             moreButton.innerHTML = `<div class="small-spinner"></div> Generating...`;
             moreButton.disabled = true;
             
             try {
-                // Show a realistic "thinking" delay
-                await new Promise(resolve => setTimeout(resolve, 4000));
-                
-                // Generate 3 new suggestions based on existing ones
-                const currentIdeas = currentQuestion.suggestionPills;
-                const completion = await websim.chat.completions.create({
+                await new Promise(resolve => setTimeout(resolve, 1000)); // Reduced realistic "thinking" delay
+
+                const currentIdeas = currentQuestion.suggestionPills || [];
+                const requestPayload = {
                     messages: [
                         { 
                             role: "system", 
@@ -91,16 +126,15 @@ export class BrainstormPhaseManager {
                             content: `Generate 3 fresh, thoughtful suggestions for: "${currentQuestion.question}"`
                         }
                     ],
-                    json: true
-                });
+                    json: true // We expect the 'content' from API to be a JSON string (array of ideas)
+                };
                 
-                const newIdeas = JSON.parse(completion.content);
+                const apiResponse = await this._callApiForMoreSuggestions(requestPayload);
+                const newIdeas = JSON.parse(apiResponse.content); // Parse the JSON string from API's content
                 
-                // Add new pills to the UI
                 const pillsContainer = this.domElements.aiPromptElement.querySelector('.suggestion-pills');
-                moreButton.remove(); // Remove the old button
+                moreButton.remove(); 
                 
-                // Create a function to add pills with animation
                 const addPillWithAnimation = (idea, index) => {
                     const pill = document.createElement('button');
                     pill.className = 'suggestion-pill new-pill';
@@ -109,7 +143,6 @@ export class BrainstormPhaseManager {
                     pill.style.transform = 'translateX(-5px)';
                     pillsContainer.appendChild(pill);
                     
-                    // Animate in the text word by word
                     const words = idea.split(' ');
                     let displayedText = '';
                     let wordIndex = 0;
@@ -119,30 +152,26 @@ export class BrainstormPhaseManager {
                             displayedText += (wordIndex > 0 ? ' ' : '') + words[wordIndex];
                             pill.textContent = displayedText;
                             wordIndex++;
-                            setTimeout(animateNextWord, 150);
+                            setTimeout(animateNextWord, 100); // Faster word animation
                         } else {
-                            // When done, add the click event
                             pill.addEventListener('click', () => {
                                 this.ideasManager.addIdea(idea);
                             });
                         }
                     };
                     
-                    // Start animations with staggered timing
                     setTimeout(() => {
                         pill.style.transition = 'opacity 0.3s, transform 0.3s';
                         pill.style.opacity = '1';
                         pill.style.transform = 'translateX(0)';
                         animateNextWord();
-                    }, index * 300);
+                    }, index * 200); // Faster stagger
                 };
                 
-                // Add each pill with animation
                 newIdeas.forEach((idea, index) => {
                     addPillWithAnimation(idea, index);
                 });
                 
-                // Add a new "more ideas" button at the end after all pills are added
                 setTimeout(() => {
                     const newMoreButton = document.createElement('button');
                     newMoreButton.id = 'generate-more-pills';
@@ -158,15 +187,34 @@ export class BrainstormPhaseManager {
                         newMoreButton.style.transform = 'translateX(0)';
                         newMoreButton.addEventListener('click', () => this.generateMoreSuggestions(currentQuestion));
                     }, 100);
-                }, newIdeas.length * 300 + 200);
+                }, newIdeas.length * 200 + 150);
                 
-                // Add the new ideas to the question's suggestion pills
-                currentQuestion.suggestionPills = [...currentQuestion.suggestionPills, ...newIdeas];
+                currentQuestion.suggestionPills = [...(currentQuestion.suggestionPills || []), ...newIdeas];
                 
             } catch (error) {
                 console.error('Error generating more suggestions:', error);
-                moreButton.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/></svg> More ideas`;
-                moreButton.disabled = false;
+                // Restore button if it exists or re-create it if it was removed
+                let existingMoreButton = this.domElements.aiPromptElement.querySelector('#generate-more-pills');
+                if (!existingMoreButton) {
+                    const pillsContainer = this.domElements.aiPromptElement.querySelector('.suggestion-pills');
+                    if (pillsContainer) {
+                        existingMoreButton = document.createElement('button');
+                        existingMoreButton.id = 'generate-more-pills';
+                        existingMoreButton.className = 'generate-more-pills';
+                        pillsContainer.appendChild(existingMoreButton);
+                        existingMoreButton.addEventListener('click', () => this.generateMoreSuggestions(currentQuestion));
+                    }
+                }
+                if (existingMoreButton) {
+                    existingMoreButton.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/></svg> More ideas (Error)`;
+                    existingMoreButton.disabled = false;
+                }
+                 // Optionally, display a user-friendly error message in the UI
+                const errorDisplay = document.createElement('p');
+                errorDisplay.textContent = 'Could not generate more suggestions at this time.';
+                errorDisplay.style.color = 'red';
+                this.domElements.aiPromptElement.appendChild(errorDisplay);
+                setTimeout(() => errorDisplay.remove(), 5000);
             }
         }
     }
@@ -174,7 +222,7 @@ export class BrainstormPhaseManager {
     async skipToNextQuestion() {
         this.timerManager.stopTimer();
         
-        // Generate AI review before moving to next question
+        // Generate AI review (uses AIService which now calls /api/generate)
         const reviewText = await this.aiService.generateAiQuestionReview();
         if (reviewText) {
             this.domElements.aiProgressComment.innerHTML = reviewText;
@@ -190,17 +238,16 @@ export class BrainstormPhaseManager {
     }
     
     async finishSession() {
-        // Switch to results phase
         this.uiManager.switchToResultsPhase();
         
-        // Instantiate results phase manager to handle results display
         const resultsPhaseManager = new ResultsPhaseManager(
             this.sessionState, 
             this.domElements, 
-            this.aiService, 
+            this.aiService, // AIService is passed, which uses the correct API
             this.uiManager
         );
         
         await resultsPhaseManager.displayResults();
     }
 }
+// ===== END dealgen/js/managers/BrainstormPhaseManager.js ===== //
