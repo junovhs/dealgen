@@ -1,0 +1,9 @@
+Making ANY App AI-Powered (Using This Template):
+Core AI Logic in api/generate.js: For any new app, your api/generate.js (or a similar serverless function) will be the central point for AI interaction. You don't modify this file per app if it's designed to be a generic AI request forwarder. However, if different apps need radically different AI interaction patterns not covered by the messages array, you might need different API endpoints (e.g., /api/generateText, /api/generateImage). For this specific "AI Storm" app, generate.js handles its needs.
+Frontend Service (AIService.js-like file):
+Create a similar service file in your new app's JavaScript.
+This service will be responsible for making fetch calls to your /api/generate endpoint.
+It will construct the messages array based on the specific needs of your new app's UI and context.
+It will handle the response from /api/generate, parsing the content as needed.
+
+The key is that the frontend only talks to your /api/generate endpoint. It doesn't directly use any AI provider's SDK or API keys. This keeps your keys secure and centralizes your AI logic.
