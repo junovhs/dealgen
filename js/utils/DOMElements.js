@@ -25,7 +25,8 @@ export class DOMElements {
         this.customTime = document.getElementById('custom-time');
         this.startSessionBtn = document.getElementById('start-session');
         this.aiLoading = document.getElementById('ai-loading');
-        
+        this.logo = document.querySelector('.logo'); // Added logo element
+
         // Brainstorm phase elements
         this.timerElement = document.getElementById('timer');
         this.pauseTimerBtn = document.getElementById('pause-timer');

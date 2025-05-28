@@ -49,6 +49,7 @@
     top: 8px;
     left: 12px;
     animation: pulse 3s infinite alternate;
+    animation-play-state: paused;
 }
 
 .brain-path {
@@ -84,6 +85,7 @@
     transform: translateY(-50%);
     filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.6));
     animation: flash 3s infinite alternate;
+    animation-play-state: paused;
     z-index: 2;
 }
 
@@ -96,5 +98,11 @@
 @keyframes flash {
     0%, 80% { opacity: 0.7; filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.3)); }
     90%, 100% { opacity: 1; filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.8)); }
+}
+
+/* Animation control class */
+.logo-animating .brain-circle,
+.logo-animating .logo-lightning {
+    animation-play-state: running;
 }
 

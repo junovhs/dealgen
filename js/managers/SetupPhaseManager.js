@@ -52,14 +52,25 @@ export class SetupPhaseManager {
         this.sessionState.focus = `${this.sessionState.contextGoal} (Context: ${this.sessionState.contextSituation.substring(0, 50)}${this.sessionState.contextSituation.length > 50 ? '...' : ''})`;
 
         // Show loading indicator only after validation
+        this.uiManager.startLogoAnimation(); // Start logo animation
         this.domElements.aiLoading.classList.remove('hidden');
         this.domElements.startSessionBtn.disabled = true;
 
-        // Generate AI questions
-        await this.aiService.generateAiQuestions();
+        try {
+            // Generate AI questions
+            await this.aiService.generateAiQuestions();
 
-        // Hide loading indicator
-        this.domElements.aiLoading.classList.add('hidden');
+            // Hide loading indicator and stop animation
+            this.domElements.aiLoading.classList.add('hidden');
+            this.uiManager.stopLogoAnimation(); // Stop logo animation
+        } catch (error) {
+            console.error("Error generating AI questions:", error);
+            this.domElements.aiLoading.classList.add('hidden');
+            this.domElements.startSessionBtn.disabled = false; // Re-enable button
+            this.uiManager.stopLogoAnimation(); // Stop logo animation
+            alert('Failed to generate AI questions. Please try again.');
+            return; // Stop further execution
+        }
 
         // Update session progress banner for current round
         this.uiManager.updateSessionProgressBanner(this.sessionState);

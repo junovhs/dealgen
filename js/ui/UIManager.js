@@ -94,4 +94,17 @@ export class UIManager {
         // Re-enable start button
         this.domElements.startSessionBtn.disabled = false;
     }
+
+    // Logo animation controls
+    startLogoAnimation() {
+        if (this.domElements.logo) {
+            this.domElements.logo.classList.add('logo-animating');
+        }
+    }
+
+    stopLogoAnimation() {
+        if (this.domElements.logo) {
+            this.domElements.logo.classList.remove('logo-animating');
+        }
+    }
 }
